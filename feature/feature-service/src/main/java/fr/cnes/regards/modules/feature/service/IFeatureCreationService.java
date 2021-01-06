@@ -7,11 +7,11 @@ import fr.cnes.regards.modules.feature.domain.FeatureEntity;
 import fr.cnes.regards.modules.feature.domain.request.FeatureCreationRequest;
 import fr.cnes.regards.modules.feature.dto.Feature;
 import fr.cnes.regards.modules.feature.dto.FeatureCreationCollection;
-import fr.cnes.regards.modules.feature.dto.FeatureUpdateCollection;
 import fr.cnes.regards.modules.feature.dto.RequestInfo;
 import fr.cnes.regards.modules.feature.dto.event.in.FeatureCreationRequestEvent;
+import fr.cnes.regards.modules.feature.service.job.FeatureCreationJob;
 
-public interface IFeatureCreationService extends IFeatureDeniedService {
+public interface IFeatureCreationService extends IAbstractFeatureService {
 
     /**
      * Register creation requests in database for further processing from incoming request events
@@ -21,7 +21,7 @@ public interface IFeatureCreationService extends IFeatureDeniedService {
     /**
      * Create a list of {@link FeatureCreationRequest} from a list of {@link Feature} stored in a {@link FeatureCreationCollection}
      * and return a {@link RequestInfo} full of request ids and occured errors
-     * @param toHandle {@link FeatureUpdateCollection} it contain all {@link Feature} to handle
+     * @param collection {@link FeatureCreationCollection} it contain all {@link Feature} to handle
      * @return {@link RequestInfo}
      */
     RequestInfo<String> registerRequests(FeatureCreationCollection collection);
@@ -37,6 +37,11 @@ public interface IFeatureCreationService extends IFeatureDeniedService {
      * Process batch of requests during job
      * @return new feature created
      */
-    Set<FeatureEntity> processRequests(List<FeatureCreationRequest> requests);
+    Set<FeatureEntity> processRequests(Set<Long> requests, FeatureCreationJob featureCreationJob);
 
+    /**
+     * Handle successful creation process
+     * @param requests successful requests
+     */
+    void handleSuccessfulCreation(Set<FeatureCreationRequest> requests);
 }

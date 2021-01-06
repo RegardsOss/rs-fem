@@ -36,7 +36,6 @@ import fr.cnes.regards.modules.feature.service.IFeatureCopyService;
 import fr.cnes.regards.modules.feature.service.IFeatureCreationService;
 import fr.cnes.regards.modules.feature.service.IFeatureDeletionService;
 import fr.cnes.regards.modules.feature.service.IFeatureNotificationService;
-import fr.cnes.regards.modules.feature.service.IFeatureReferenceService;
 import fr.cnes.regards.modules.feature.service.IFeatureUpdateService;
 import net.javacrumbs.shedlock.core.LockAssert;
 import net.javacrumbs.shedlock.core.LockConfiguration;
@@ -75,10 +74,6 @@ public class FeatureTaskScheduler extends AbstractTaskScheduler {
 
     private static final String COPY_REQUESTS = "FEATURE COPY REQUESTS";
 
-    private static final String REFERENCE_REQUEST_LOCK = "scheduleFReference";
-
-    private static final String REFERENCE_REQUESTS = "FEATURE REFERENCE REQUESTS";
-
     private static final String NOTIFICATION_REQUEST_LOCK = "scheduleFNotification";
 
     private static final String NOTIFICATION_REQUESTS = "FEATURE NOTIFICATION REQUESTS";
@@ -98,24 +93,6 @@ public class FeatureTaskScheduler extends AbstractTaskScheduler {
     @Autowired
     private IFeatureCreationService featureService;
 
-    @Autowired
-    private IFeatureUpdateService featureUpdateService;
-
-    @Autowired
-    private IFeatureDeletionService featureDeletionService;
-
-    @Autowired
-    private IFeatureReferenceService featureReferenceService;
-
-    @Autowired
-    private IFeatureCopyService featureCopyService;
-
-    @Autowired
-    private IFeatureNotificationService featureNotificationService;
-
-    @Autowired
-    private LockingTaskExecutors lockingTaskExecutors;
-
     private final Task createTask = () -> {
         LockAssert.assertLocked();
         long start = System.currentTimeMillis();
@@ -124,6 +101,9 @@ public class FeatureTaskScheduler extends AbstractTaskScheduler {
             LOGGER.info(LOG_FORMAT, INSTANCE_RANDOM_ID, nb, CREATE_REQUESTS, System.currentTimeMillis() - start);
         }
     };
+
+    @Autowired
+    private IFeatureUpdateService featureUpdateService;
 
     private final Task updateTask = () -> {
         LockAssert.assertLocked();
@@ -134,6 +114,9 @@ public class FeatureTaskScheduler extends AbstractTaskScheduler {
         }
     };
 
+    @Autowired
+    private IFeatureDeletionService featureDeletionService;
+
     private final Task deleteTask = () -> {
         LockAssert.assertLocked();
         long start = System.currentTimeMillis();
@@ -143,14 +126,8 @@ public class FeatureTaskScheduler extends AbstractTaskScheduler {
         }
     };
 
-    private final Task referenceTask = () -> {
-        LockAssert.assertLocked();
-        long start = System.currentTimeMillis();
-        int nb = this.featureReferenceService.scheduleRequests();
-        if (nb != 0) {
-            LOGGER.info(LOG_FORMAT, INSTANCE_RANDOM_ID, nb, REFERENCE_REQUESTS, System.currentTimeMillis() - start);
-        }
-    };
+    @Autowired
+    private IFeatureCopyService featureCopyService;
 
     private final Task copyTask = () -> {
         LockAssert.assertLocked();
@@ -161,14 +138,20 @@ public class FeatureTaskScheduler extends AbstractTaskScheduler {
         }
     };
 
-    private final Task notificationTask = () -> {
+    @Autowired
+    private IFeatureNotificationService featureNotificationService;
+
+    private final Task notificationRequestHandlingTask = () -> {
         LockAssert.assertLocked();
         long start = System.currentTimeMillis();
-        int nb = this.featureNotificationService.scheduleRequests();
+        int nb = this.featureNotificationService.sendToNotifier();
         if (nb != 0) {
             LOGGER.info(LOG_FORMAT, INSTANCE_RANDOM_ID, nb, NOTIFICATION_REQUESTS, System.currentTimeMillis() - start);
         }
     };
+
+    @Autowired
+    private LockingTaskExecutors lockingTaskExecutors;
 
     @Override
     protected Logger getLogger() {
@@ -227,23 +210,6 @@ public class FeatureTaskScheduler extends AbstractTaskScheduler {
     }
 
     @Scheduled(initialDelayString = "${regards.feature.request.scheduling.initial.delay:" + DEFAULT_INITIAL_DELAY + "}",
-            fixedDelayString = "${regards.feature.request.reference.scheduling.delay:" + DEFAULT_SCHEDULING_DELAY + "}")
-    public void scheduleReferenceRequests() {
-        for (String tenant : tenantResolver.getAllActiveTenants()) {
-            try {
-                runtimeTenantResolver.forceTenant(tenant);
-                traceScheduling(tenant, REFERENCE_REQUESTS);
-                lockingTaskExecutors.executeWithLock(referenceTask, new LockConfiguration(REFERENCE_REQUEST_LOCK,
-                        Instant.now().plusSeconds(MAX_TASK_DELAY)));
-            } catch (Throwable e) {
-                handleSchedulingError(REFERENCE_REQUESTS, NOTIFICATION_TITLE, e);
-            } finally {
-                runtimeTenantResolver.clearTenant();
-            }
-        }
-    }
-
-    @Scheduled(initialDelayString = "${regards.feature.request.scheduling.initial.delay:" + DEFAULT_INITIAL_DELAY + "}",
             fixedDelayString = "${regards.feature.request.copy.scheduling.delay:" + DEFAULT_SCHEDULING_DELAY + "}")
     public void scheduleCopyRequests() {
         for (String tenant : tenantResolver.getAllActiveTenants()) {
@@ -268,8 +234,8 @@ public class FeatureTaskScheduler extends AbstractTaskScheduler {
             try {
                 runtimeTenantResolver.forceTenant(tenant);
                 traceScheduling(tenant, NOTIFICATION_REQUESTS);
-                lockingTaskExecutors.executeWithLock(notificationTask, new LockConfiguration(NOTIFICATION_REQUEST_LOCK,
-                        Instant.now().plusSeconds(MAX_TASK_DELAY)));
+                lockingTaskExecutors.executeWithLock(notificationRequestHandlingTask, new LockConfiguration(
+                        NOTIFICATION_REQUEST_LOCK, Instant.now().plusSeconds(MAX_TASK_DELAY)));
             } catch (Throwable e) {
                 handleSchedulingError(NOTIFICATION_REQUESTS, NOTIFICATION_TITLE, e);
             } finally {

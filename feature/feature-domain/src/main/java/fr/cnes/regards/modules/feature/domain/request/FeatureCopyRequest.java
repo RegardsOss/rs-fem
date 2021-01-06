@@ -21,20 +21,14 @@ package fr.cnes.regards.modules.feature.domain.request;
 import java.time.OffsetDateTime;
 
 import javax.persistence.Column;
-import javax.persistence.Convert;
+import javax.persistence.DiscriminatorValue;
 import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.SequenceGenerator;
-import javax.persistence.Table;
 
 import fr.cnes.regards.modules.feature.domain.FeatureEntity;
 import fr.cnes.regards.modules.feature.dto.Feature;
 import fr.cnes.regards.modules.feature.dto.PriorityLevel;
 import fr.cnes.regards.modules.feature.dto.event.out.RequestState;
 import fr.cnes.regards.modules.feature.dto.urn.FeatureUniformResourceName;
-import fr.cnes.regards.modules.feature.dto.urn.converter.FeatureUrnConverter;
 
 /**
  * Contain a storage path to add to a {@link Feature} of a {@link FeatureEntity}
@@ -42,17 +36,8 @@ import fr.cnes.regards.modules.feature.dto.urn.converter.FeatureUrnConverter;
  *
  */
 @Entity
-@Table(name = "t_feature_copy_request")
-public class FeatureCopyRequest extends AbstractRequest {
-
-    @Id
-    @SequenceGenerator(name = "featureCopyRequest", initialValue = 1, sequenceName = "seq_feature_copy_request")
-    @GeneratedValue(generator = "featureCopyRequest", strategy = GenerationType.SEQUENCE)
-    private Long id;
-
-    @Column(nullable = false, length = FeatureUniformResourceName.MAX_SIZE)
-    @Convert(converter = FeatureUrnConverter.class)
-    private FeatureUniformResourceName urn;
+@DiscriminatorValue(AbstractFeatureRequest.COPY)
+public class FeatureCopyRequest extends AbstractFeatureRequest {
 
     @Column(name = "storage", nullable = false)
     private String storage;
@@ -74,22 +59,6 @@ public class FeatureCopyRequest extends AbstractRequest {
         return request;
     }
 
-    public FeatureUniformResourceName getUrn() {
-        return urn;
-    }
-
-    public void setUrn(FeatureUniformResourceName urn) {
-        this.urn = urn;
-    }
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
     public String getStorage() {
         return storage;
     }
@@ -104,5 +73,10 @@ public class FeatureCopyRequest extends AbstractRequest {
 
     public void setChecksum(String checksum) {
         this.checksum = checksum;
+    }
+
+    @Override
+    public <U> U accept(IAbstractFeatureRequestVisitor<U> visitor) {
+        return visitor.visitCopyRequest(this);
     }
 }

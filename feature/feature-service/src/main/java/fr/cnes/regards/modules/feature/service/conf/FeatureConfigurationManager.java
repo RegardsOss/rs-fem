@@ -19,27 +19,25 @@
 package fr.cnes.regards.modules.feature.service.conf;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import com.google.common.collect.Sets;
-
 import fr.cnes.regards.framework.module.manager.AbstractModuleManager;
 import fr.cnes.regards.framework.module.manager.ModuleConfiguration;
 import fr.cnes.regards.framework.module.manager.ModuleConfigurationItem;
 import fr.cnes.regards.framework.module.rest.exception.EntityNotFoundException;
 import fr.cnes.regards.framework.module.rest.exception.ModuleException;
-import fr.cnes.regards.framework.modules.plugins.domain.PluginConfiguration;
-import fr.cnes.regards.framework.modules.plugins.service.IPluginService;
+import fr.cnes.regards.framework.modules.dump.domain.DumpSettings;
+import fr.cnes.regards.framework.modules.dump.service.settings.IDumpSettingsService;
+import fr.cnes.regards.modules.feature.domain.settings.FeatureNotificationSettings;
+import fr.cnes.regards.modules.feature.service.settings.IFeatureNotificationSettingsService;
+import fr.cnes.regards.modules.feature.service.task.FeatureSaveMetadataScheduler;
 
 /**
  * Configuration manager for current module
@@ -51,78 +49,74 @@ public class FeatureConfigurationManager extends AbstractModuleManager<Void> {
     private static final Logger LOGGER = LoggerFactory.getLogger(FeatureConfigurationManager.class);
 
     @Autowired
-    private IPluginService pluginService;
+    private FeatureSaveMetadataScheduler featureSaveMetadataScheduler;
 
-    @Override
-    public Set<String> resetConfiguration() {
-        Set<String> errors = Sets.newHashSet();
-        for (PluginConfiguration p : pluginService.getAllPluginConfigurations()) {
-            try {
-                pluginService.deletePluginConfiguration(p.getBusinessId());
-            } catch (ModuleException e) {
-                LOGGER.warn(RESET_FAIL_MESSAGE, e);
-                errors.add(e.getMessage());
-            }
-        }
-        return errors;
-    }
+    @Autowired
+    private IFeatureNotificationSettingsService notificationSettingsService;
+
+    @Autowired
+    private IDumpSettingsService dumpSettingsService;
 
     @Override
     protected Set<String> importConfiguration(ModuleConfiguration configuration) {
-
         Set<String> importErrors = new HashSet<>();
-        Set<PluginConfiguration> configurations = getPluginConfs(configuration.getConfiguration());
-
-        // First create connections
-        for (PluginConfiguration plgConf : configurations) {
-            try {
-                Optional<PluginConfiguration> existingOne = loadPluginConfiguration(plgConf.getBusinessId());
-                if (existingOne.isPresent()) {
-                    existingOne.get().setLabel(plgConf.getLabel());
-                    existingOne.get().setParameters(plgConf.getParameters());
-                    pluginService.updatePluginConfiguration(existingOne.get());
-                } else {
-                    pluginService.savePluginConfiguration(plgConf);
+        for (ModuleConfigurationItem<?> item : configuration.getConfiguration()) {
+            if (DumpSettings.class.isAssignableFrom(item.getKey())) {
+                try {
+                    featureSaveMetadataScheduler.updateDumpAndScheduler(item.getTypedValue());
+                } catch (ModuleException e) {
+                    importErrors.add(String.format("New dump settings were not updated, cause by: %s", e.getMessage()));
+                    LOGGER.error("Not able to update new dump settings, cause by:", e);
                 }
-            } catch (ModuleException e) {
-                LOGGER.warn(IMPORT_FAIL_MESSAGE, e);
-                importErrors.add(e.getMessage());
+            } else if (FeatureNotificationSettings.class.isAssignableFrom(item.getKey())) {
+                notificationSettingsService.update(item.getTypedValue());
+            } else {
+                String message = String.format(
+                        "Configuration item of type %s has been ignored while import because it cannot be handled by %s. Module %s",
+                        item.getKey(),
+                        this.getClass().getName(),
+                        configuration.getModule().getName());
+                importErrors.add(message);
+                LOGGER.warn(message);
             }
         }
-
         return importErrors;
     }
 
-    private Optional<PluginConfiguration> loadPluginConfiguration(String businessId) {
-        PluginConfiguration existingOne = null;
-        try {
-            existingOne = pluginService.getPluginConfiguration(businessId);
-        } catch (EntityNotFoundException e) { // NOSONAR
-            // Nothing to do, plugin configuration does not exists.
-        }
-        return Optional.ofNullable(existingOne);
-    }
-
     @Override
-    public ModuleConfiguration exportConfiguration() throws ModuleException {
+    public ModuleConfiguration exportConfiguration() {
         List<ModuleConfigurationItem<?>> configurations = new ArrayList<>();
-        // export connections
-        for (PluginConfiguration factory : pluginService.getAllPluginConfigurations()) {
-            // All connection should be active
-            PluginConfiguration exportedConf = pluginService.prepareForExport(factory);
-            exportedConf.setIsActive(true);
-            configurations.add(ModuleConfigurationItem.build(exportedConf));
+
+        DumpSettings dumpSettings = dumpSettingsService.retrieve();
+        if (dumpSettings != null) {
+            configurations.add(ModuleConfigurationItem.build(dumpSettings));
         }
+
+        FeatureNotificationSettings notifSettings = notificationSettingsService.retrieve();
+        if (notifSettings != null) {
+            configurations.add(ModuleConfigurationItem.build(notifSettings));
+        }
+
         return ModuleConfiguration.build(info, true, configurations);
     }
 
-    /**
-     * Get all {@link PluginConfiguration}s of the {@link ModuleConfigurationItem}s
-     * @param items {@link ModuleConfigurationItem}s
-     * @return  {@link PluginConfiguration}s
-     */
-    private Set<PluginConfiguration> getPluginConfs(Collection<ModuleConfigurationItem<?>> items) {
-        return items.stream().filter(i -> PluginConfiguration.class.isAssignableFrom(i.getKey()))
-                .map(i -> (PluginConfiguration) i.getTypedValue()).collect(Collectors.toSet());
+    @Override
+    public Set<String> resetConfiguration() {
+        Set<String> errors = new HashSet<>();
+        try {
+            dumpSettingsService.resetSettings();
+        } catch (Exception e) {
+            String error = "Error occurred while resetting dump settings.";
+            LOGGER.error(error, e);
+            errors.add(error);
+        }
+        try {
+            notificationSettingsService.resetSettings();
+        } catch (Exception e) {
+            String error = "Error occurred while resetting notification settings.";
+            LOGGER.error(error, e);
+            errors.add(error);
+        }
+        return errors;
     }
 }

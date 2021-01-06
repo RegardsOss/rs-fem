@@ -19,6 +19,7 @@
 package fr.cnes.regards.modules.feature.rest;
 
 import java.time.OffsetDateTime;
+import java.util.Set;
 import java.util.UUID;
 
 import org.assertj.core.util.Lists;
@@ -28,6 +29,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
+
+import com.google.common.collect.Sets;
 
 import fr.cnes.regards.framework.geojson.GeoJsonMediaType;
 import fr.cnes.regards.framework.jpa.multitenant.test.AbstractMultitenantServiceTest;
@@ -65,14 +68,15 @@ public class FeatureEntityControllerIT extends AbstractFeatureIT {
                 .build(UUID.randomUUID().toString(), "owner", OffsetDateTime.now(), RequestState.GRANTED, null,
                        featureToAdd, meta, FeatureRequestStep.LOCAL_SCHEDULED, PriorityLevel.NORMAL);
 
-        featureService.processRequests(Lists.newArrayList(request));
+        Set<Long> ids = Sets.newHashSet(request.getId());
+        featureService.processRequests(ids, null);
 
         RequestBuilderCustomizer requestBuilderCustomizer = customizer().expectStatusOk();
         requestBuilderCustomizer.addHeader(HttpHeaders.CONTENT_TYPE, GeoJsonMediaType.APPLICATION_GEOJSON_VALUE);
         requestBuilderCustomizer.addParameter("model", "FEATURE01");
 
         performDefaultGet(FeatureEntityControler.PATH_DATA_FEATURE_OBJECT, requestBuilderCustomizer,
-                          "Error retrieving feautres");
+                          "Error retrieving features");
 
     }
 

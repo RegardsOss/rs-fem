@@ -23,19 +23,21 @@ import java.util.Set;
 
 import javax.validation.Valid;
 
+import fr.cnes.regards.framework.amqp.event.IRequestDeniedService;
 import fr.cnes.regards.modules.feature.domain.request.FeatureDeletionRequest;
 import fr.cnes.regards.modules.feature.dto.Feature;
 import fr.cnes.regards.modules.feature.dto.FeatureDeletionCollection;
 import fr.cnes.regards.modules.feature.dto.RequestInfo;
 import fr.cnes.regards.modules.feature.dto.event.in.FeatureDeletionRequestEvent;
 import fr.cnes.regards.modules.feature.dto.urn.FeatureUniformResourceName;
+import fr.cnes.regards.modules.feature.service.job.FeatureDeletionJob;
 
 /**
  * Service for deleting Features
  * @author Kevin Marchois
  *
  */
-public interface IFeatureDeletionService extends IFeatureDeniedService {
+public interface IFeatureDeletionService extends IAbstractFeatureService {
 
     /**
      * Register delete requests in database for further processing from incoming request events
@@ -52,7 +54,7 @@ public interface IFeatureDeletionService extends IFeatureDeniedService {
     /**
      * Process batch of requests during job
      */
-    void processRequests(List<FeatureDeletionRequest> requests);
+    void processRequests(List<FeatureDeletionRequest> requests, FeatureDeletionJob featureDeletionJob);
 
     /**
      * Process batch of successful storage request
