@@ -18,6 +18,8 @@
  */
 package fr.cnes.regards.modules.feature.service;
 
+import javax.persistence.EntityManager;
+import javax.persistence.PersistenceContext;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -42,7 +44,6 @@ import org.springframework.validation.MapBindingResult;
 import org.springframework.validation.Validator;
 
 import com.google.common.collect.Sets;
-
 import fr.cnes.regards.framework.amqp.IPublisher;
 import fr.cnes.regards.framework.authentication.IAuthenticationResolver;
 import fr.cnes.regards.framework.jpa.multitenant.transactional.MultitenantTransactional;
@@ -58,6 +59,7 @@ import fr.cnes.regards.modules.feature.dao.IFeatureCreationRequestRepository;
 import fr.cnes.regards.modules.feature.dao.IFeatureEntityRepository;
 import fr.cnes.regards.modules.feature.domain.FeatureEntity;
 import fr.cnes.regards.modules.feature.domain.IUrnVersionByProvider;
+import fr.cnes.regards.modules.feature.domain.request.AbstractFeatureRequest;
 import fr.cnes.regards.modules.feature.domain.request.FeatureCreationMetadataEntity;
 import fr.cnes.regards.modules.feature.domain.request.FeatureCreationRequest;
 import fr.cnes.regards.modules.feature.domain.request.FeatureRequestStep;
@@ -138,6 +140,9 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
     @Autowired
     private IFeatureNotificationSettingsService notificationSettingsService;
 
+    @PersistenceContext
+    private EntityManager em;
+
     @Override
     public RequestInfo<String> registerRequests(List<FeatureCreationRequestEvent> events) {
 
@@ -167,7 +172,7 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
         List<FeatureCreationRequestEvent> toTreat = new ArrayList<>();
         for (Feature feature : collection.getFeatures()) {
             toTreat.add(FeatureCreationRequestEvent
-                    .build(collection.getRequestOwner(), collection.getMetadata(), feature));
+                                .build(collection.getRequestOwner(), collection.getMetadata(), feature));
         }
         return registerRequests(toTreat);
     }
@@ -190,8 +195,8 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
         validator.validate(item, errors);
         validateRequest(item, errors);
 
-        if (existingRequestIds.contains(item.getRequestId())
-                || grantedRequests.stream().anyMatch(request -> request.getRequestId().equals(item.getRequestId()))) {
+        if (existingRequestIds.contains(item.getRequestId()) || grantedRequests.stream()
+                .anyMatch(request -> request.getRequestId().equals(item.getRequestId()))) {
             errors.rejectValue("requestId", "request.requestId.exists.error.message", "Request id already exists");
         }
 
@@ -263,12 +268,11 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
         Set<Long> requestIds = new HashSet<>();
         List<ILightFeatureCreationRequest> requestsToSchedule = new ArrayList<>();
 
-        List<ILightFeatureCreationRequest> dbRequests = this.featureCreationRequestRepo
-                .findRequestsToSchedule(FeatureRequestStep.LOCAL_DELAYED,
-                                        OffsetDateTime.now(),
-                                        PageRequest.of(0,
-                                                       properties.getMaxBulkSize(),
-                                                       Sort.by(Order.asc("priority"), Order.asc("requestDate"))))
+        List<ILightFeatureCreationRequest> dbRequests = this.featureCreationRequestRepo.findRequestsToSchedule(
+                FeatureRequestStep.LOCAL_DELAYED,
+                OffsetDateTime.now(),
+                PageRequest
+                        .of(0, properties.getMaxBulkSize(), Sort.by(Order.asc("priority"), Order.asc("requestDate"))))
                 .getContent();
 
         if (!dbRequests.isEmpty()) {
@@ -286,8 +290,11 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
             jobParameters.add(new JobParameter(FeatureCreationJob.IDS_PARAMETER, requestIds));
 
             // the job priority will be set according the priority of the first request to schedule
-            JobInfo jobInfo = new JobInfo(false, requestsToSchedule.get(0).getPriority().getPriorityLevel(),
-                    jobParameters, authResolver.getUser(), FeatureCreationJob.class.getName());
+            JobInfo jobInfo = new JobInfo(false,
+                                          requestsToSchedule.get(0).getPriority().getPriorityLevel(),
+                                          jobParameters,
+                                          authResolver.getUser(),
+                                          FeatureCreationJob.class.getName());
             jobInfoService.createAsQueued(jobInfo);
 
             LOGGER.trace("------------->>> {} creation requests scheduled in {} ms",
@@ -321,15 +328,22 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
 
         // Register features
         subProcessStart = System.currentTimeMillis();
-        Set<FeatureEntity> entities = requests.stream()
-                .map(request -> initFeatureEntity(request,
-                                                  versionByProviders.get(request.getProviderId()),
-                                                  urnByProviders.get(request.getProviderId()),
-                                                  featureCreationJob))
+        Set<FeatureEntity> entities = requests.stream().map(request -> initFeatureEntity(request,
+                                                                                         versionByProviders
+                                                                                                 .get(request.getProviderId()),
+                                                                                         urnByProviders
+                                                                                                 .get(request.getProviderId()),
+                                                                                         featureCreationJob))
                 .collect(Collectors.toSet());
-        entities.stream().filter(entity -> entity.getPreviousVersionUrn() != null)
-                .forEach(entity -> entity.getFeature().setLast(false));
+        // get previous versions to set last to false
+        Set<String> previousUrns = entities.stream().filter(entity -> entity.getPreviousVersionUrn() != null)
+                .map(entity -> entity.getPreviousVersionUrn().toString()).collect(Collectors.toSet());
+
+        // save new features
         this.featureRepo.saveAll(entities);
+        if (!previousUrns.isEmpty()) {
+            featureCreationRequestRepo.updateLastByUrnIn(false, previousUrns);
+        }
         LOGGER.trace("------------->>> {} feature saved in {} ms",
                      entities.size(),
                      System.currentTimeMillis() - subProcessStart);
@@ -345,9 +359,8 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
 
         // Delete requests without files
         Set<FeatureCreationRequest> requestWithoutFiles = requests.stream()
-                .filter(request -> (request.getFeature().getFiles() == null)
-                        || request.getFeature().getFiles().isEmpty())
-                .collect(Collectors.toSet());
+                .filter(request -> (request.getFeature().getFiles() == null) || request.getFeature().getFiles()
+                        .isEmpty()).collect(Collectors.toSet());
         // handling of requests without files is already done so they are successful
         handleSuccessfulCreation(requestWithoutFiles);
         LOGGER.trace("------------->>> {} creation requests processed in {} ms",
@@ -375,12 +388,12 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
 
             // if a previous version exists we will publish a FeatureDeletionRequest to delete it
             if ((request.getFeatureEntity().getPreviousVersionUrn() != null) && request.getMetadata().isOverride()) {
-                this.notificationClient
-                        .notify(String.format("A FeatureEntity with the URN %s already exists for this feature",
-                                              request.getFeatureEntity().getPreviousVersionUrn()),
-                                "A duplicated feature has been detected",
-                                NotificationLevel.INFO,
-                                DefaultRole.ADMIN);
+                this.notificationClient.notify(String.format(
+                        "A FeatureEntity with the URN %s already exists for this feature",
+                        request.getFeatureEntity().getPreviousVersionUrn()),
+                                               "A duplicated feature has been detected",
+                                               NotificationLevel.INFO,
+                                               DefaultRole.ADMIN);
                 publisher.publish(FeatureDeletionRequestEvent.build(request.getMetadata().getSessionOwner(),
                                                                     request.getFeatureEntity().getPreviousVersionUrn(),
                                                                     PriorityLevel.NORMAL));
@@ -396,8 +409,12 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
                     featureCreationRequestRepo.save(request);
                 }
             } else {
+                for(FeatureCreationRequest fcr: requests) {
+                    em.detach(fcr);
+                }
                 // Successful requests are deleted now!
-                featureCreationRequestRepo.deleteInBatch(requests);
+                featureCreationRequestRepo.deleteByUrnIn(requests.stream().map(AbstractFeatureRequest::getUrn)
+                                                                 .collect(Collectors.toSet()));
                 LOGGER.trace("------------->>> {} creation requests deleted in {} ms",
                              requests.size(),
                              System.currentTimeMillis() - startSuccessProcess);
@@ -424,40 +441,41 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
             for (FeatureFileLocation loc : file.getLocations()) {
                 // there is no metadata but a file location so we will update reference
                 if (!fcr.getMetadata().hasStorage()) {
-                    fcr.setGroupId(this.storageClient
-                            .reference(FileReferenceRequestDTO.build(attribute.getFilename(),
-                                                                     attribute.getChecksum(),
-                                                                     attribute.getAlgorithm(),
-                                                                     attribute.getMimeType().toString(),
-                                                                     attribute.getFilesize(),
-                                                                     fcr.getFeature().getUrn().toString(),
-                                                                     loc.getStorage(),
-                                                                     loc.getUrl()))
-                            .getGroupId());
+                    fcr.setGroupId(this.storageClient.reference(FileReferenceRequestDTO.build(attribute.getFilename(),
+                                                                                              attribute.getChecksum(),
+                                                                                              attribute.getAlgorithm(),
+                                                                                              attribute.getMimeType()
+                                                                                                      .toString(),
+                                                                                              attribute.getFilesize(),
+                                                                                              fcr.getFeature().getUrn()
+                                                                                                      .toString(),
+                                                                                              loc.getStorage(),
+                                                                                              loc.getUrl()))
+                                           .getGroupId());
                 }
                 for (StorageMetadata metadata : fcr.getMetadata().getStorages()) {
                     if (loc.getStorage() == null) {
-                        fcr.setGroupId(this.storageClient
-                                .store(FileStorageRequestDTO.build(attribute.getFilename(),
-                                                                   attribute.getChecksum(),
-                                                                   attribute.getAlgorithm(),
-                                                                   attribute.getMimeType().toString(),
-                                                                   fcr.getFeature().getUrn().toString(),
-                                                                   loc.getUrl(),
-                                                                   metadata.getPluginBusinessId(),
-                                                                   Optional.of(loc.getUrl())))
-                                .getGroupId());
+                        fcr.setGroupId(this.storageClient.store(FileStorageRequestDTO.build(attribute.getFilename(),
+                                                                                            attribute.getChecksum(),
+                                                                                            attribute.getAlgorithm(),
+                                                                                            attribute.getMimeType()
+                                                                                                    .toString(),
+                                                                                            fcr.getFeature().getUrn()
+                                                                                                    .toString(),
+                                                                                            loc.getUrl(),
+                                                                                            metadata.getPluginBusinessId(),
+                                                                                            Optional.of(loc.getUrl())))
+                                               .getGroupId());
                     } else {
-                        fcr.setGroupId(this.storageClient
-                                .reference(FileReferenceRequestDTO.build(attribute.getFilename(),
-                                                                         attribute.getChecksum(),
-                                                                         attribute.getAlgorithm(),
-                                                                         attribute.getMimeType().toString(),
-                                                                         attribute.getFilesize(),
-                                                                         fcr.getFeature().getUrn().toString(),
-                                                                         loc.getStorage(),
-                                                                         loc.getUrl()))
-                                .getGroupId());
+                        fcr.setGroupId(this.storageClient.reference(FileReferenceRequestDTO
+                                                                            .build(attribute.getFilename(),
+                                                                                   attribute.getChecksum(),
+                                                                                   attribute.getAlgorithm(),
+                                                                                   attribute.getMimeType().toString(),
+                                                                                   attribute.getFilesize(),
+                                                                                   fcr.getFeature().getUrn().toString(),
+                                                                                   loc.getStorage(),
+                                                                                   loc.getUrl())).getGroupId());
                     }
                 }
             }
@@ -488,8 +506,11 @@ public class FeatureCreationService extends AbstractFeatureService implements IF
                                                         computeNextVersion(previousVersion)));
         // as version compute is previous + 1, this feature is forcibly the last
         feature.setLast(true);
-        FeatureEntity created = FeatureEntity.build(fcr.getMetadata()
-                .getSessionOwner(), fcr.getMetadata().getSession(), feature, previousUrn, fcr.getFeature().getModel());
+        FeatureEntity created = FeatureEntity.build(fcr.getMetadata().getSessionOwner(),
+                                                    fcr.getMetadata().getSession(),
+                                                    feature,
+                                                    previousUrn,
+                                                    fcr.getFeature().getModel());
         created.setVersion(feature.getUrn().getVersion());
         fcr.setFeatureEntity(created);
         fcr.setUrn(created.getUrn());
